@@ -1,0 +1,113 @@
+# -*-coding:utf-8-*-
+# @Author:malphite.tang
+import json
+import requests
+from queue import Queue
+requests.packages.urllib3.disable_warnings()    # 消除equests提示警告
+
+class Awvs():
+    def __init__(self):
+        self.host = 'https://localhost:3443'
+        self.add_url_api = self.host + '/api/v1/targets'  # 新增任务接口
+        self.speed_url_api = self.host + '/api/v1/targets/{}/configuration'  # 设置扫描速度接口
+        self.scan_url_api = self.host + '/api/v1/scans'  # 启动扫描任务接口
+        self.stats_url_api = self.host + '/api/v1/me/stats'  # 仪表盘接口
+        self.del_target_api = self.host + '/api/v1/targets/{}' #删除任务接口
+        self.API_KEY = '1986ad8c0a5b3df4d7028d5f3c06e936c2bbbaefd664344d8a574e3ad5ff0ae50'
+        self.header = {'X-Auth': self.API_KEY, 'content-type': 'application/json'}  # header格式
+        self.target_url = Queue()  # 创建扫描url队列
+        self.target_id = Queue()  # 创建任务id号队列
+        self.speed = 'fast'  # 定义扫描速度
+
+    def main(self):  # 主程序-选择对应的功能
+        print('选择要使用的功能(输入相应的编号)：')
+        print('1.使用target.txt添加扫描任务  (注：url必须带有http或https)')
+        print('2.查看扫描器详情')
+        print('3.删除所有任务')
+        print('4.退出')
+        choice = input('>')
+        if choice == '1':
+            self.run1()
+            exit()
+        if choice == '2':
+            self.run2()
+            exit()
+        if choice == '3':
+            self.run3()
+            exit()
+        if choice == '4':
+            exit()
+        else:
+            self.main()
+
+    def run1(self):  # 创建任务,自动设置为fast模式，并开启扫描。
+        self.url_queue()
+        self.add_target()
+        self.scan_target()
+    def url_queue(self):    # 提取target.txt文件里面的url，并添加进self.target_url队列
+        fh = open(r'./target.txt', 'r', encoding='utf-8')
+        for i in fh.readlines():
+            url = i.strip('\n')        # 去除空行和回车行
+            self.target_url.put(url)
+    def add_target(self):    # 添加扫描任务，并将返回包里的target_id添加进self.target_id队列
+        while True:
+            if self.target_url.empty():        # 判断x'Bself.target_url队列是否为空，为空就中断循环
+                break
+            target_url = self.target_url.get()            # 取self.target_url队列中的元素
+            add_data = json.dumps({'address' : target_url,
+                                    'description' : target_url,
+                                   'criticality' : '10'})
+            add_target_res=requests.post(url=self.add_url_api,headers=self.header,data=add_data,verify=False)    #添加任务
+            if add_target_res.status_code==201:        # 判断状态码是否为201
+                target_id=add_target_res.json()['target_id']#以json格式打开add_target_res,
+                self.target_id.put(target_id)       # 将创建好任务的target_id，添加到target_id队列中
+            else:
+                print('任务建立失败，请检查host和API_KEY是否修改正确')
+    def scan_target(self):    # 设置扫描速度，并启动扫描任务
+        while True:
+            if self.target_id.empty():    # 判断self.target_id队列是否为空，为空就中断循环
+                break
+            scan_target_id = self.target_id.get()    # 取self.target_id队列中的元素
+            set_data = json.dumps({'scan_speed': self.speed})
+            scan_data = json.dumps({"target_id": scan_target_id,
+                                     "profile_id": "11111111-1111-1111-1111-111111111111",
+                                     "schedule": {'disable': False, 'start_date': None, 'time_sensitive': False}})
+            set_speed_res = requests.patch(url=self.speed_url_api.format(scan_target_id),data=set_data,headers=self.header,verify=False)    #设置扫描速度
+            if set_speed_res.status_code==204:    # 判断状态码是否为204
+                scan_target_res=requests.post(url=self.scan_url_api,data=scan_data,headers=self.header,verify=False)    #启动扫描任务
+                if scan_target_res.status_code==201:    # 判断状态码是否为201
+                    print(scan_target_res.json()['target_id']+'任务建立成功')
+                else:
+                    print('任务建立失败，请检查host和API_KEY是否修改正确')
+
+    def run2(self):  # 查看仪表盘
+        stats_res = requests.get(url=self.stats_url_api, headers=self.header, verify=False).json()
+        print('任务总数：' + str(stats_res['targets_count']))
+        print('正在扫描的任务数量：'+str(stats_res['scans_running_count']))
+        print('等待扫描的任务数量：'+str(stats_res['scans_waiting_count']))
+        print('任务详情：')
+        for i in stats_res['most_vulnerable_targets']:
+            task_details=i['address']+'   High risk：'+str(i['high_vuln_count'])+'   medium risk：'+str(i['med_vuln_count'])
+            print(task_details)
+
+    def run3(self):  # 删除所有任务
+        self.get_target_id()
+        self.del_target()
+    def get_target_id(self):        # 获取所有任务的扫描的地址和id
+        stats_res=requests.get(url=self.add_url_api,headers=self.header,verify=False).json()['targets']
+        for i in stats_res:
+            self.target_id.put([i['address'],i['target_id']])       # 将地址和id已列表的形式添加进target_id队列
+    def del_target(self):           # 删除任务
+        while True:
+            if self.target_id.empty():
+                break
+            del_target_id=self.target_id.get()      # 取target_id队列的元素
+            del_target_res=requests.delete(url=self.del_target_api.format(del_target_id[1]),headers=self.header,verify=False)
+            if del_target_res.status_code==204:
+                print('成功删除{}' .format(del_target_id[0]))
+            else:
+                print('删除失败')
+
+if __name__ == '__main__':
+    aw = Awvs()
+    aw.main()
